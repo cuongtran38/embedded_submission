@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <Preferences.h> // [MỚI] Thư viện để lưu dữ liệu vào Flash
 
 #include "web_interface.h"
 
@@ -14,6 +15,7 @@ const char* password = "12345678";
 // --- CẤU HÌNH PHẦN CỨNG ---
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 RTC_DS3231 rtc;
+Preferences preferences; // [MỚI] Khởi tạo đối tượng Preferences
 
 // Định nghĩa chân
 #define BUTTON_SVC_PIN    15  
@@ -24,7 +26,6 @@ RTC_DS3231 rtc;
 #define TRIG_1  5   
 #define ECHO_1  18
 
-// Chân Sensor 2 (giữ nguyên chân 25, 26 như đã sửa trước đó)
 #define TRIG_2  25  
 #define ECHO_2  26  
 
@@ -36,7 +37,7 @@ AsyncWebServer server(80);
 AsyncWebSocket ws("/ws"); 
 
 // --- BIẾN TOÀN CỤC ---
-const float DETECT_THRESHOLD = 8.0; // Ngưỡng phát hiện 8cm
+const float DETECT_THRESHOLD = 8.0; 
 const float SLOW_SERVICE_LIMIT = 120.0; 
 
 float avg_service_time = 0.0;       
@@ -55,6 +56,12 @@ void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType 
   if (type == WS_EVT_CONNECT) {
     IPAddress ip = client->remoteIP();
     Serial.printf("\n[IoT]: Client %d.%d.%d.%d da ket noi!\n", ip[0], ip[1], ip[2], ip[3]);
+    
+    // Gửi ngay trạng thái hiện tại cho client mới kết nối
+    DateTime now = rtc.now();
+    sprintf(timeStr, "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
+    snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"ticket\":%d,\"time\":\"%s\",\"avg\":%.1f}", current_ticket, timeStr, avg_service_time);
+    client->text(jsonBuffer);
   }
 }
 
@@ -62,13 +69,27 @@ void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22); 
 
+  // [MỚI] KHÔI PHỤC DỮ LIỆU TỪ FLASH
+  // Mở namespace tên là "queue_data", false = chế độ đọc/ghi
+  preferences.begin("queue_data", false); 
+  
+  // Lấy dữ liệu cũ ra. Nếu không có (lần đầu hoặc sau reset) thì lấy mặc định
+  current_ticket = preferences.getInt("ticket", 1); 
+  avg_service_time = preferences.getFloat("avg_time", 0.0);
+
+  Serial.println("--- KHOI PHUC DU LIEU ---");
+  Serial.print("Ticket: "); Serial.println(current_ticket);
+  Serial.print("Avg Time: "); Serial.println(avg_service_time);
+
   WiFi.disconnect();
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
 
   lcd.init(); lcd.backlight();
-  lcd.setCursor(0,0); lcd.print("Khoi dong...");
-  
+  lcd.setCursor(0,0); lcd.print("Khoi phuc...");
+  lcd.setCursor(0,1); lcd.print("Ticket: #"); lcd.print(current_ticket);
+  delay(1500); // Dừng chút để nhìn thấy số đã khôi phục
+
   // Khởi tạo chân GPIO
   pinMode(TRIG_1, OUTPUT); pinMode(ECHO_1, INPUT);
   pinMode(TRIG_2, OUTPUT); pinMode(ECHO_2, INPUT);
@@ -88,8 +109,8 @@ void setup() {
   server.on("/khach", HTTP_GET, [](AsyncWebServerRequest *request){ request->send_P(200, "text/html", client_html); });
   server.begin();
 
-  lcd.clear(); lcd.print("Ready!"); delay(1000);
-  last_press_time = millis();
+  lcd.clear(); lcd.print("Ready!"); delay(500);
+  last_press_time = millis(); // Reset lại thời điểm bắt đầu đếm ngược cho phiên hiện tại
 }
 
 float getDistance(int trigPin, int echoPin) {
@@ -105,7 +126,7 @@ float getDistance(int trigPin, int echoPin) {
 void loop() {
   ws.cleanupClients(); 
 
-  // --- NÚT NEXT ---
+  // --- NÚT NEXT (Khách tiếp theo) ---
   int read1 = digitalRead(BUTTON_SVC_PIN);
   if (read1 == LOW && lastButtonState1 == HIGH && (millis() - lastDebounceTime1) > 250) { 
     lastDebounceTime1 = millis();
@@ -125,22 +146,39 @@ void loop() {
       if (avg_service_time == 0) avg_service_time = duration;
       else avg_service_time = (ALPHA * duration) + ((1.0 - ALPHA) * avg_service_time);
     }
+
+    // [MỚI] LƯU DỮ LIỆU SAU MỖI LẦN TĂNG SỐ
+    preferences.putInt("ticket", current_ticket);
+    preferences.putFloat("avg_time", avg_service_time);
+    Serial.println("[Saved] Data saved to Flash!");
   }
   lastButtonState1 = read1;
 
-  // --- NÚT ALARM ---
+  // --- NÚT ALARM (Nhân viên xác nhận chậm) ---
   if (digitalRead(BUTTON_ALARM_PIN) == LOW) {
     staff_acknowledged = true;
-    if (avg_service_time > SLOW_SERVICE_LIMIT) avg_service_time = 30.0; 
+    if (avg_service_time > SLOW_SERVICE_LIMIT) {
+        avg_service_time = 30.0; 
+        // [MỚI] Lưu lại nếu có thay đổi thời gian trung bình
+        preferences.putFloat("avg_time", avg_service_time);
+    }
   }
 
-  // --- NÚT RESET ---
+  // --- NÚT RESET (Bắt đầu ca mới) ---
   if (digitalRead(BUTTON_RESET_PIN) == LOW) {
     staff_acknowledged = true;
     current_ticket = 1;     
     avg_service_time = 0.0; 
+    
+    // [MỚI] LƯU TRẠNG THÁI RESET VÀO FLASH
+    preferences.putInt("ticket", 1);
+    preferences.putFloat("avg_time", 0.0);
+    // Hoặc dùng preferences.clear() để xóa sạch cũng được
+    
     ws.textAll("{\"type\":\"RESET\"}");
-    lcd.clear(); lcd.print("SYSTEM RESET!"); delay(1000);
+    lcd.clear(); lcd.print("SYSTEM RESET!"); 
+    Serial.println("[Reset] Data cleared for new shift.");
+    delay(1000);
     last_press_time = millis(); 
   }
 
@@ -149,27 +187,24 @@ void loop() {
   float d2 = getDistance(TRIG_2, ECHO_2); delay(20);
   float d3 = getDistance(TRIG_3, ECHO_3);
   
-
   int estimated_people = 0;
   String status_msg = "IDLE";
   
-  // Ưu tiên kiểm tra từ xa đến gần
   if (d3 < DETECT_THRESHOLD && d3 > 0) { 
-      estimated_people = 15; // Sensor 3 chạm -> 15 người
+      estimated_people = 15; 
       status_msg = "OVERLOAD"; 
   }
   else if (d2 < DETECT_THRESHOLD && d2 > 0) { 
-      estimated_people = 10; // Sensor 2 chạm -> 10 người
+      estimated_people = 10; 
       status_msg = "BUSY"; 
   }
   else if (d1 < DETECT_THRESHOLD && d1 > 0) { 
-      estimated_people = 10;  // Sensor 1 chạm -> 5 người
+      estimated_people = 5;  
       status_msg = "ACTIVE"; 
   }
 
   // --- ĐÈN BÁO ---
   bool isSlow = (avg_service_time > SLOW_SERVICE_LIMIT && avg_service_time > 0); 
-  // Cập nhật điều kiện Overload là >= 15 người
   bool isOverloaded = (estimated_people >= 15);
   
   if (!isOverloaded && !isSlow) {
@@ -203,9 +238,7 @@ void loop() {
       lastSerialTime = millis();
       Serial.print("Q:"); Serial.print(estimated_people); 
       Serial.print("|Tkt:"); Serial.print(current_ticket);
-      Serial.print("|S1:"); Serial.print(d1);
-      Serial.print("|S2:"); Serial.print(d2);
-      Serial.println("|S3:"); Serial.println(d3);
+      Serial.print("|Avg:"); Serial.println(avg_service_time);
   }
   
   delay(10); 
