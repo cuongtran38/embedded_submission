@@ -1,315 +1,155 @@
-#include <systemc.h> 
-
-#include <iostream> 
-
-#include <iomanip> // Thư viện để format in ấn cho đẹp 
-
- 
-
-using namespace std; 
-
- 
-
-// -------------------------------------------------------------------------- 
-
-// MODULE: QueueMonitor (Mô phỏng ESP32) 
-
-// -------------------------------------------------------------------------- 
-
-SC_MODULE(QueueMonitor) { 
-
-// INPUTS 
-
-sc_in<double> dist_s1, dist_s2, dist_s3; // 3 Cảm biến 
-
-sc_in<bool> btn_service; // Nút 1: Khách xong (Active LOW) 
-
-sc_in<bool> btn_staff; // Nút 2: Nhân viên (Active LOW) 
-
- 
-
-// OUTPUTS 
-
-sc_out<bool> led_alarm; // Đèn báo động 
-
- 
-
-// INTERNAL VARIABLES 
-
-double avg_service_time; 
-
-bool staff_acknowledged; 
-
-bool last_btn_svc_state; 
-
-bool last_btn_staff_state; 
-
- 
-
-// CONSTANTS 
-
-const double DETECT_THRESHOLD = 10.0; 
-
-const double SLOW_LIMIT = 120.0; 
-
- 
-
-void process_logic() { 
-
-// 1. ĐỌC CẢM BIẾN & TÍNH HÀNG ĐỢI 
-
-double d1 = dist_s1.read(); 
-
-double d2 = dist_s2.read(); 
-
-double d3 = dist_s3.read(); 
-
-int queue_len = 0; 
-
- 
-
-if (d3 < DETECT_THRESHOLD) queue_len = 10; 
-
-else if (d2 < DETECT_THRESHOLD) queue_len = 5; 
-
-else if (d1 < DETECT_THRESHOLD) queue_len = 1; 
-
- 
-
-// 2. XỬ LÝ NÚT SERVICE (Mô phỏng EMA) 
-
-bool btn_svc_curr = btn_service.read(); 
-
-if (btn_svc_curr == 0 && last_btn_svc_state == 1) { // Nhấn xuống (Falling edge) 
-
-// Giả lập: Mỗi lần nhấn là đo được 1 khoảng thời gian ngẫu nhiên 
-
-// Để test logic, ta giả định lần này phục vụ mất 25s 
-
-double measured = 25.0;  
-
-// Công thức EMA: New = 0.3 * Measured + 0.7 * Old 
-
-avg_service_time = (0.3 * measured) + (0.7 * avg_service_time); 
-
-// In log sự kiện 
-
-cout << "\n>>> EVENT: Khach hang bam nut 'Xong' (Avg moi: " << avg_service_time << "s)" << endl; 
-
-} 
-
-last_btn_svc_state = btn_svc_curr; 
-
- 
-
-// 3. XỬ LÝ NÚT STAFF (Reset lỗi) 
-
-bool btn_staff_curr = btn_staff.read(); 
-
-if (btn_staff_curr == 0 && last_btn_staff_state == 1) { // Nhấn xuống 
-
-staff_acknowledged = true; 
-
-if (avg_service_time > SLOW_LIMIT) { 
-
-avg_service_time = 30.0; // Reset về chuẩn 
-
-cout << "\n>>> EVENT: Nhan vien da RESET thoi gian phuc vu!" << endl; 
-
-} 
-
-} 
-
-last_btn_staff_state = btn_staff_curr; 
-
- 
-
-// 4. LOGIC ĐÈN BÁO ĐỘNG (ALARM) 
-
-bool isOverloaded = (queue_len >= 10); 
-
-bool isSlow = (avg_service_time > SLOW_LIMIT); 
-
- 
-
-if (!isOverloaded && !isSlow) { 
-
-staff_acknowledged = false; // Tự động reset cờ khi hết lỗi 
-
-led_alarm.write(false); // Tắt đèn 
-
-}  
-
-else if ((isOverloaded || isSlow) && !staff_acknowledged) { 
-
-led_alarm.write(true); // Bật đèn 
-
-}  
-
-else { 
-
-led_alarm.write(false); // Tắt đèn (Do nhân viên đã xác nhận) 
-
-} 
-
- 
-
-// 5. MÔ PHỎNG HIỂN THỊ LCD & LED 
-
-print_simulation_ui(queue_len, avg_service_time, isOverloaded, isSlow, led_alarm.read()); 
-
-} 
-
- 
-
-// Hàm vẽ giao diện LCD giả lập ra màn hình console 
-
-void print_simulation_ui(int q, double avg, bool ovr, bool slow, bool led) { 
-
-// Chỉ in khi có sự thay đổi lớn để đỡ rối mắt 
-
-cout << "@" << sc_time_stamp() << " -------------------------" << endl; 
-
-// Mô phỏng dòng 1 LCD 
-
-cout << "| LCD L1: "; 
-
-if (ovr) cout << "OVERLOAD! Call.. |" << endl; 
-
-else if (slow) cout << "SLOW! Call Staff |" << endl; 
-
-else cout << "Queue: " << q << " pers |" << endl; 
-
- 
-
-// Mô phỏng dòng 2 LCD 
-
-int wait = q * avg; 
-
-cout << "| LCD L2: Wait: " << wait/60 << "m " << wait%60 << "s |" << endl; 
-
-cout << "-------------------------" << endl; 
-
-// Trạng thái LED 
-
-cout << "[LED ALARM]: " << (led ? "ON (!!!)" : "OFF (...)") << endl; 
-
-cout << endl; 
-
-} 
-
- 
-
-SC_CTOR(QueueMonitor) { 
-
-avg_service_time = 30.0; // Mặc định 
-
-staff_acknowledged = false; 
-
-last_btn_svc_state = 1; 
-
-last_btn_staff_state = 1; 
-
- 
-
-SC_METHOD(process_logic); 
-
-sensitive << dist_s1 << dist_s2 << dist_s3 << btn_service << btn_staff; 
-
-} 
-
-}; 
-
- 
-
-// -------------------------------------------------------------------------- 
-
-// MODULE: Testbench (Kịch bản kiểm thử) 
-
-// -------------------------------------------------------------------------- 
-
-SC_MODULE(Testbench) { 
-
-sc_out<double> s1, s2, s3; 
-
-sc_out<bool> b_svc, b_staff; 
-
- 
-
-void generate_scenario() { 
-
-// Mặc định ban đầu: Không có người, Nút nhả (High - Pullup logic) 
-
-s1.write(200); s2.write(200); s3.write(200); 
-
-b_svc.write(1); b_staff.write(1); 
-
-wait(5, SC_SEC); 
-
- 
-
-// KỊCH BẢN 1: Người vào đông dần -> QUÁ TẢI 
-
-cout << "\n--- SCENARIO 1: KHACH VAO DONG ---" << endl; 
-
-s1.write(50); wait(2, SC_SEC); // 1 người 
-
-s2.write(50); wait(2, SC_SEC); // 5 người 
-
-s3.write(50); wait(2, SC_SEC); // 10 người -> LED phải sáng! 
-
- 
-
-// KỊCH BẢN 2: Nhân viên đến bấm nút xác nhận -> Đèn tắt 
-
-cout << "\n--- SCENARIO 2: NHAN VIEN XAC NHAN ---" << endl; 
-
-wait(2, SC_SEC); 
-
-b_staff.write(0); // Nhấn nút Staff 
-
-wait(0.5, SC_SEC); 
-
-b_staff.write(1); // Nhả nút 
-
-wait(5, SC_SEC); // Đèn phải tắt dù hàng vẫn đông 
-
- 
-
-// KỊCH BẢN 3: Khách vãn bớt -> Hệ thống về bình thường 
-
-cout << "\n--- SCENARIO 3: KHACH VE BOT ---" << endl; 
-
-s3.write(200); // Hết người ở cuối 
-
-wait(2, SC_SEC); 
-
-s2.write(200); // Hết người ở giữa 
-
-wait(5, SC_SEC); 
-
- 
-
-// KỊCH BẢN 4: Phục vụ khách (Ấn nút Service) 
-
-cout << "\n--- SCENARIO 4: PHUC VU KHACH ---" << endl; 
-
-b_svc.write(0); wait(0.5, SC_SEC); b_svc.write(1); // Ấn lần 1 
-
-wait(2, SC_SEC); 
-
-sc_stop(); 
-
-} 
-
- 
-
-SC_CTOR(Testbench) { 
-
-SC_THREAD(generate_scenario); 
-
-} 
-
-}; 
-
- 
+#include <systemc.h>
+#include <iostream>
+#include <iomanip>
+
+// --- THAM SỐ CẤU HÌNH (Giống hệt file .ino) ---
+const double DETECT_THRESHOLD = 8.0; // cm
+const double ALPHA = 0.3;
+
+// =================================================
+// 1. MODULE BỘ ĐIỀU KHIỂN TRUNG TÂM (Giống ESP32)
+// =================================================
+SC_MODULE(QueueController) {
+// Các cổng vào (Inputs)
+sc_in<bool> clk;
+sc_in<bool> btn_next; // Nút Next
+sc_in<bool> btn_reset; // Nút Reset
+sc_in<double> s1_dist; // Cảm biến 1
+sc_in<double> s2_dist; // Cảm biến 2
+sc_in<double> s3_dist; // Cảm biến 3
+
+// Biến nội bộ (Internal Variables)
+int current_ticket;
+double avg_service_time;
+int estimated_people;
+bool is_overloaded;
+
+// Hàm xử lý chính (Tương đương void loop)
+void process() {
+// --- LOGIC 1: XỬ LÝ NÚT BẤM NEXT ---
+if (btn_next.read() == true) {
+// Giả lập tính toán thời gian phục vụ (random nhẹ để mô phỏng)
+double current_duration = 30.0; // Giả sử lần này làm mất 30s
+// Công thức Adaptive Average
+if (avg_service_time == 0) avg_service_time = current_duration;
+else avg_service_time = (ALPHA * current_duration) + ((1.0 - ALPHA) * avg_service_time);
+current_ticket++;
+cout << "@" << sc_time_stamp() << " [CTRL] >> NUT NEXT BAM -> Ticket #" << current_ticket
+<< " | Avg Time update: " << avg_service_time << "s" << endl;
+}
+
+// --- LOGIC 2: XỬ LÝ NÚT RESET ---
+if (btn_reset.read() == true) {
+current_ticket = 1;
+avg_service_time = 0.0;
+cout << "@" << sc_time_stamp() << " [CTRL] >> SYSTEM RESET!" << endl;
+}
+
+// --- LOGIC 3: ƯỚC LƯỢNG HÀNG ĐỢI (Zone-based) ---
+double d1 = s1_dist.read();
+double d2 = s2_dist.read();
+double d3 = s3_dist.read();
+
+estimated_people = 0;
+if (d3 < DETECT_THRESHOLD && d3 > 0) estimated_people = 15; // Overload
+else if (d2 < DETECT_THRESHOLD && d2 > 0) estimated_people = 10; // Busy
+else if (d1 < DETECT_THRESHOLD && d1 > 0) estimated_people = 5; // Active
+
+is_overloaded = (estimated_people >= 15);
+
+// --- IN TRẠNG THÁI RA MÀN HÌNH (Mô phỏng LCD) ---
+cout << "@" << sc_time_stamp() << " [LCD DISPLAY]: "
+<< "Ticket #" << current_ticket
+<< " | Queue: " << estimated_people << " nguoi"
+<< " | Status: " << (is_overloaded ? "OVERLOAD!!!" : "Normal") << endl;
+}
+
+// Constructor
+SC_CTOR(QueueController) {
+SC_METHOD(process);
+sensitive << clk.pos(); // Chạy theo xung nhịp đồng hồ
+// Khởi tạo giá trị ban đầu
+current_ticket = 1;
+avg_service_time = 0.0;
+estimated_people = 0;
+}
+};
+
+// =================================================
+// 2. MODULE TESTBENCH (Tạo tình huống giả lập)
+// =================================================
+SC_MODULE(Testbench) {
+// Các cổng ra (Outputs) - Nối vào Controller
+sc_out<bool> btn_next, btn_reset;
+sc_out<double> s1_dist, s2_dist, s3_dist;
+sc_in<bool> clk;
+
+void generate_stimulus() {
+// Tình huống 1: Khởi động, chưa có ai
+btn_next.write(false); btn_reset.write(false);
+s1_dist.write(100.0); s2_dist.write(100.0); s3_dist.write(100.0); // Không có vật cản
+wait();
+
+// Tình huống 2: Có 5 người đến (Sensor 1 bị che - <8cm)
+cout << "\n--- [TEST]: 5 Nguoi den ---" << endl;
+s1_dist.write(4.0); // 4cm
+wait();
+
+// Tình huống 3: Nhân viên bấm Next
+cout << "\n--- [TEST]: Nhan vien bam Next ---" << endl;
+btn_next.write(true);
+wait();
+btn_next.write(false); // Nhả nút
+wait();
+
+// Tình huống 4: Đông người (Sensor 2 bị che)
+cout << "\n--- [TEST]: 10 Nguoi den (Dong duc) ---" << endl;
+s2_dist.write(4.0);
+wait();
+
+// Tình huống 5: Quá tải (Sensor 3 bị che)
+cout << "\n--- [TEST]: 15 Nguoi den (QUA TAI) ---" << endl;
+s3_dist.write(4.0);
+wait();
+
+// Tình huống 6: Reset hệ thống
+cout << "\n--- [TEST]: Reset he thong ---" << endl;
+btn_reset.write(true);
+wait();
+btn_reset.write(false);
+sc_stop(); // Dừng mô phỏng
+}
+
+SC_CTOR(Testbench) {
+SC_THREAD(generate_stimulus);
+sensitive << clk.pos();
+}
+};
+
+// =================================================
+// 3. MAIN (Kết nối dây)
+// =================================================
+int sc_main(int argc, char* argv[]) {
+// Tín hiệu kết nối
+sc_signal<bool> btn_next_sig, btn_reset_sig;
+sc_signal<double> s1_sig, s2_sig, s3_sig;
+sc_clock clk("clk", 1, SC_SEC); // Đồng hồ chu kỳ 1s
+
+// Khởi tạo Module
+QueueController ctrl("Controller");
+Testbench tb("Testbench");
+
+// Nối dây (Wiring)
+ctrl.clk(clk); tb.clk(clk);
+ctrl.btn_next(btn_next_sig); tb.btn_next(btn_next_sig);
+ctrl.btn_reset(btn_reset_sig); tb.btn_reset(btn_reset_sig);
+ctrl.s1_dist(s1_sig); tb.s1_dist(s1_sig);
+ctrl.s2_dist(s2_sig); tb.s2_dist(s2_sig);
+ctrl.s3_dist(s3_sig); tb.s3_dist(s3_sig);
+
+// Bắt đầu chạy
+cout << "BAT DAU MO PHONG SYSTEMC..." << endl;
+sc_start();
+
+return 0;
+}
