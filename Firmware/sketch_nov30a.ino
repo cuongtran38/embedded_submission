@@ -18,7 +18,7 @@ RTC_DS3231 rtc;
 Preferences preferences; // [MỚI] Khởi tạo đối tượng Preferences
 
 // Định nghĩa chân
-#define BUTTON_SVC_PIN    15  
+#define BUTTON_NEXT_PIN    15  
 #define BUTTON_ALARM_PIN  13  
 #define BUTTON_RESET_PIN  14  
 #define LED_ALARM_PIN     2   
@@ -95,7 +95,7 @@ void setup() {
   pinMode(TRIG_2, OUTPUT); pinMode(ECHO_2, INPUT);
   pinMode(TRIG_3, OUTPUT); pinMode(ECHO_3, INPUT);
   
-  pinMode(BUTTON_SVC_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_NEXT_PIN, INPUT_PULLUP);
   pinMode(BUTTON_ALARM_PIN, INPUT_PULLUP);
   pinMode(BUTTON_RESET_PIN, INPUT_PULLUP);
   pinMode(LED_ALARM_PIN, OUTPUT);
@@ -127,7 +127,7 @@ void loop() {
   ws.cleanupClients(); 
 
   // --- NÚT NEXT (Khách tiếp theo) ---
-  int read1 = digitalRead(BUTTON_SVC_PIN);
+  int read1 = digitalRead(BUTTON_NEXT_PIN);
   if (read1 == LOW && lastButtonState1 == HIGH && (millis() - lastDebounceTime1) > 250) { 
     lastDebounceTime1 = millis();
     unsigned long current_time = millis();
