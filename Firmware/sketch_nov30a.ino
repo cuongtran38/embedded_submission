@@ -239,6 +239,11 @@ void loop() {
       Serial.print("Q:"); Serial.print(estimated_people); 
       Serial.print("|Tkt:"); Serial.print(current_ticket);
       Serial.print("|Avg:"); Serial.println(avg_service_time);
+      Serial.print("|S1:"); Serial.print(d1); 
+      Serial.print("|S2:"); Serial.print(d2); 
+      Serial.print("|S3:"); Serial.print(d3); 
+
+  } 
   }
   
   delay(10); 
