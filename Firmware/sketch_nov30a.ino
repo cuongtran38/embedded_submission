@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <Preferences.h> //  Thư viện để lưu dữ liệu vào Flash
+#include <Preferences.h> 
 
 #include "web_interface.h"
 
@@ -15,7 +15,7 @@ const char* password = "12345678";
 // --- CẤU HÌNH PHẦN CỨNG ---
 LiquidCrystal_I2C lcd(0x27, 16, 2); 
 RTC_DS3231 rtc;
-Preferences preferences; //  Khởi tạo đối tượng Preferences
+Preferences preferences; 
 
 // Định nghĩa chân
 #define BUTTON_NEXT_PIN    15  
